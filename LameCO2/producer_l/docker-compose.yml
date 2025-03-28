@@ -1,0 +1,34 @@
+version: "3"
+services:
+  producer:
+    build: .
+    stdin_open: true # docker run -i
+    tty: true # docker run -t
+    container_name: producer_l
+    ports:
+      - '8000:8000'
+    restart: "always"
+    command: /bin/bash
+    networks:
+      - mynetwork
+    volumes:
+      - app:/producer_l/app
+    environment:
+      # 内部网络访问Kafka: 这里的 "kafka" 即 Kafka 容器名，端口根据之前 Kafka 的内部端口配置
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - KAFKA_TOPIC=mytopic
+      # 如果还需其他自定义环境变量，可在此添加
+
+      
+networks:
+  mynetwork:
+    external: true
+
+volumes:
+  app:
+    driver: local
+    driver_opts:
+      type: 'none'
+      o: 'bind'
+      device: 'D:/Advanced_Big_Data/Final_Projet_eCO2/LameCO2/producer_l/app'
+      

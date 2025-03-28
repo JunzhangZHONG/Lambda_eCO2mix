@@ -1,0 +1,172 @@
+version: "3"
+
+services:
+  # ============ Zookeeper ============ 
+  zookeeper:
+    image: confluentinc/cp-zookeeper
+    container_name: zookeeper
+    networks:
+      - network1
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  # ============ Kafka ============ 
+  kafka:
+    image: confluentinc/cp-kafka
+    container_name: kafka
+    networks:
+      - network1
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "9091:9091"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ADVERTISED_HOST_NAME: kafka:9092
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      # 对内（容器间）监听
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+
+  # ============ Kafka UI (Kafdrop) ============ 
+  kafdrop:
+    image: obsidiandynamics/kafdrop
+    container_name: kafdrop
+    networks:
+      - network1
+    depends_on:
+      - kafka
+      - zookeeper
+    ports:
+      - 19000:9000
+    environment:
+      # 对应上面 kafka:29092
+      KAFKA_BROKERCONNECT: kafka:29092
+
+  # ============ Spark Master ============ 
+  spark-master:
+    build: .
+    container_name: spark-master
+    networks:
+      - network1
+    ports:
+      - "9080:8080"   # Spark Master Web UI
+      - "7077:7077"   # Spark Master 进程通信
+      - "4040:4040"   # 常见Spark UI (driver)
+      - "7003:7000"
+    volumes:
+      - ./streaming:/opt/spark-apps/streaming
+      - ./batch:/opt/spark-apps/batch
+      - ./data:/opt/spark-data
+    environment:
+      - SPARK_LOCAL_IP=spark-master
+      - SPARK_WORKLOAD=master
+
+  # ============ Spark Worker ============ 
+  spark-worker-a:
+    build: .
+    container_name: spark-worker-a
+    networks:
+      - network1
+    depends_on:
+      - spark-master
+    ports:
+      - "9081:8080"   # Spark Worker Web UI
+      - "7001:7000"
+    environment:
+      - SPARK_MASTER=spark://spark-master:7077
+      - SPARK_WORKER_CORES=1
+      - SPARK_WORKER_MEMORY=1G
+      - SPARK_DRIVER_MEMORY=1G
+      - SPARK_EXECUTOR_MEMORY=1G
+      - SPARK_WORKLOAD=worker
+      - SPARK_LOCAL_IP=spark-worker-a
+    volumes:
+      - ./streaming:/opt/spark-apps/streaming
+      - ./data:/opt/spark-data
+
+  spark-worker-b:
+    build: .
+    container_name: spark-worker-b
+    networks:
+      - network1
+    depends_on:
+      - spark-master
+    ports:
+      - "9082:8080"   # Spark Worker Web UI
+      - "7002:7000"
+    environment:
+      - SPARK_MASTER=spark://spark-master:7077
+      - SPARK_WORKER_CORES=1
+      - SPARK_WORKER_MEMORY=1G
+      - SPARK_DRIVER_MEMORY=1G
+      - SPARK_EXECUTOR_MEMORY=1G
+      - SPARK_WORKLOAD=worker
+      - SPARK_LOCAL_IP=spark-worker-b
+    volumes:
+      - ./batch:/opt/spark-apps/batch
+      - ./data:/opt/spark-data
+
+  # ============ Cassandra (Serving层) ============ 
+  cassandra1:
+    image: cassandra:latest
+    container_name: cassandra1
+    networks:
+      - network1
+    ports:
+      - "9042:9042"
+    environment:
+      - CASSANDRA_SEEDS=cassandra1
+      - HEAP_NEWSIZE=128M
+      - MAX_HEAP_SIZE=2048M
+
+  # ============ Hadoop (Batch层) ============ 
+  # 这里用 bde2020/hadoop-namenode + bde2020/hadoop-datanode 组合
+  # 简化成最小集群(1 NameNode + 1 DataNode)
+  hadoop-namenode:
+    image: bde2020/hadoop-namenode:2.0.0-hadoop2.7.4-java8
+    container_name: hadoop-namenode
+    networks:
+      - network1
+    environment:
+      - CORE_CONF_fs_defaultFS=hdfs://hadoop-namenode:8020
+      - CLUSTER_NAME=test
+      - CLUSTER_SIZE=1
+      - DFS_REPLICATION=1
+    ports:
+      - "9870:9870"  # NameNode UI
+    volumes:
+      - hadoop_namenode:/hadoop/dfs/name
+    depends_on:
+      - kafka
+      - zookeeper
+
+  hadoop-datanode:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop2.7.4-java8
+    container_name: hadoop-datanode
+    networks:
+      - network1
+    environment:
+      - CORE_CONF_fs_defaultFS=hdfs://hadoop-namenode:8020
+      - CLUSTER_NAME=test
+      - DFS_REPLICATION=1
+    depends_on:
+      - hadoop-namenode
+    volumes:
+      - hadoop_datanode:/hadoop/dfs/data
+    ports:
+      - "9864:9864"  # DataNode UI
+
+networks:
+  network1:
+    name: mynetwork
+    driver: bridge
+
+volumes:
+  hadoop_namenode:
+  hadoop_datanode:

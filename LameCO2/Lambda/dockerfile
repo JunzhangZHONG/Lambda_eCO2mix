@@ -1,0 +1,88 @@
+#FROM openjdk:8-jdk
+FROM spark:python3-java17 as builder
+# ----- 1. 定义一些构建时变量（可根据需要修改）-----
+ARG SCALA_VERSION=2.12
+
+# ----- 2. 安装必要的工具 -----
+#RUN apt-get update && apt-get install -y \
+#    wget curl vim nano net-tools \
+# && apt-get clean \
+# && rm -rf /var/lib/apt/lists/*
+USER root
+
+RUN pip install pandas --no-cache-dir
+RUN pip install pyspark --no-cache-dir
+RUN pip install cassandra-driver  --no-cache-dir
+RUN pip install cassandra-driver[graph]  --no-cache-dir
+RUN pip install lz4==4.3.3   --no-cache-dir
+
+RUN pip install scales  --no-cache-dir
+#RUN apt-get update && apt-get install -y \
+#wget curl vim nano net-tools rsync openssh-client\
+#&& apt-get clean \
+#&& rm -rf /var/lib/apt/lists/*
+
+ENV SPARK_VERSION=3.5.4 \
+HADOOP_VERSION=3 \
+SPARK_HOME=/opt/spark \
+PYTHONHASHSEED=1
+
+FROM builder as apache-spark
+
+WORKDIR /opt/spark
+
+ENV SPARK_MASTER_PORT=7077 \
+SPARK_MASTER_WEBUI_PORT=8080 \
+SPARK_LOG_DIR=/opt/spark/logs \
+SPARK_MASTER_LOG=/opt/spark/logs/spark-master.out \
+SPARK_WORKER_LOG=/opt/spark/logs/spark-worker.out \
+SPARK_WORKER_WEBUI_PORT=8080 \
+SPARK_WORKER_PORT=7000 \
+SPARK_MASTER="spark://spark-master:7077" \
+SPARK_WORKLOAD="master"
+
+EXPOSE 8080 7077 7000
+
+RUN mkdir -p $SPARK_LOG_DIR && \
+touch $SPARK_MASTER_LOG && \
+touch $SPARK_WORKER_LOG && \
+ln -sf /dev/stdout $SPARK_MASTER_LOG && \
+ln -sf /dev/stdout $SPARK_WORKER_LOG
+# ----- 3. 下载并解压Spark(内置Hadoop 3.2) -----
+ENV SPARK_PACKAGE=spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}
+#RUN wget -q "https://dlcdn.apache.org/spark/spark-${SPARK_VERSION}/${SPARK_PACKAGE}.tgz" -O /tmp/spark.tgz \
+#    && tar xfz /tmp/spark.tgz -C /opt \
+#    && ln -s /opt/${SPARK_PACKAGE} /opt/spark \
+#    && rm /tmp/spark.tgz
+RUN wget -q "https://archive.apache.org/dist/spark/spark-3.3.2/spark-3.3.2-bin-hadoop3.tgz" -O /tmp/spark.tgz \
+    && tar xfz /tmp/spark.tgz -C /opt \
+    && ln -s /opt/spark-3.3.2-bin-hadoop3 /opt/spark \
+    && rm /tmp/spark.tgz
+# Spark环境变量
+#ENV SPARK_HOME=/opt/spark
+#ENV PATH=$PATH:$SPARK_HOME/bin:$SPARK_HOME/sbin
+
+# 安装 Python3 + pip
+RUN apt-get update && apt-get install -y python3 python3-pip \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装 cassandra-driver
+#RUN pip3 install cassandra-driver
+
+# ----- 4. (可选) 如果你想提前内置Kafka/Cassandra连接器，可在此处下载 -----
+# 示例（如需固定版本）：
+# RUN wget -q -P $SPARK_HOME/jars/ \
+#   https://repo1.maven.org/maven2/org/apache/spark/spark-sql-kafka-0-10_${SCALA_VERSION}/${SPARK_VERSION}/spark-sql-kafka-0-10_${SCALA_VERSION}-${SPARK_VERSION}.jar \
+#  && wget -q -P $SPARK_HOME/jars/ \
+#   https://repo1.maven.org/maven2/com/datastax/spark/spark-cassandra-connector_${SCALA_VERSION}/3.3.0/spark-cassandra-connector_${SCALA_VERSION}-3.3.0.jar
+
+# ----- 5. 复制并设置entrypoint脚本 -----
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# ----- 6. 暴露常用端口(可根据需要调整) -----
+EXPOSE 7077 8080 4040 6066
+
+# ----- 7. 容器启动后执行entrypoint -----
+ENTRYPOINT ["/entrypoint.sh"]
